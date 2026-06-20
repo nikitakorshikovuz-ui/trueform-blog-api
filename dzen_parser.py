@@ -3,6 +3,7 @@ from bs4 import BeautifulSoup
 import json
 import re
 import math
+import requests
 from datetime import datetime
 
 DZEN_RSS_URL = "https://dzen.ru/rss/author/699c22fc64a8661012fa62ed"
@@ -37,7 +38,20 @@ def calculate_read_time(text):
     return f"{minutes} мин" if minutes > 0 else "1 мин"
 
 def parse_dzen_feed():
-    feed = feedparser.parse(DZEN_RSS_URL)
+    print(f"[{datetime.now()}] Начинаем парсинг Дзена...")
+    
+    # Маскируемся под обычный браузер Chrome, чтобы Яндекс нас не блокировал
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36"
+    }
+    
+    try:
+        response = requests.get(DZEN_RSS_URL, headers=headers, timeout=10)
+        feed = feedparser.parse(response.content)
+    except Exception as e:
+        print(f"Ошибка загрузки ленты: {e}")
+        return
+
     blog_data = []
     
     for entry in feed.entries:
@@ -56,6 +70,8 @@ def parse_dzen_feed():
             if img_tag and img_tag.get("src"):
                 cover_url = img_tag["src"]
                 img_tag.decompose()
+            elif len(entry.get('enclosures', [])) > 0:
+                cover_url = entry.enclosures[0].href
             
             raw_text = soup.get_text(separator=" ", strip=True)
             excerpt = raw_text[:160] + "..." if len(raw_text) > 160 else raw_text
@@ -82,7 +98,8 @@ def parse_dzen_feed():
 
     with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
         json.dump(blog_data, f, ensure_ascii=False, indent=2)
+        
+    print(f"Сохранено статей: {len(blog_data)}")
 
 if __name__ == "__main__":
     parse_dzen_feed()
-    
