@@ -7,12 +7,12 @@ import re
 CHANNEL_URL = "https://t.me/s/sportpittrueform"
 OUTPUT_FILE = "telegram_blog_data.json"
 IMAGES_DIR = "images"
-# Ваша постоянная ссылка на картинки в GitHub
+# Ваша постоянная ссылка на картинки в GitHub (замените если нужно)
 GITHUB_RAW_BASE = "https://raw.githubusercontent.com/nikitakorshikovuz-ui/trueform-blog-api/main/images/"
 
 def parse_telegram():
     existing_data = []
-    # 1. Загружаем старые посты
+    # 1. Загружаем старые посты, чтобы не затереть их
     if os.path.exists(OUTPUT_FILE):
         try:
             with open(OUTPUT_FILE, 'r', encoding='utf-8') as f:
@@ -46,7 +46,7 @@ def parse_telegram():
         post_id = msg_el["data-post"] if msg_el and "data-post" in msg_el.attrs else ""
         if not post_id: continue
             
-        # Защита: Если пост уже есть — пропускаем!
+        # ЗАЩИТА: Если пост уже есть в базе — пропускаем его (не трогаем старое!)
         if post_id in existing_ids:
             continue
 
@@ -54,7 +54,7 @@ def parse_telegram():
         if not text_el: continue
         clean_text = text_el.decode_contents()
         
-        # 3. НАХОДИМ И СКАЧИВАЕМ КАРТИНКУ НАВЕЧНО
+        # 3. НАХОДИМ И СКАЧИВАЕМ КАРТИНКУ
         img_el = msg.find("a", class_="tgme_widget_message_photo_wrap")
         final_image_url = ""
         
@@ -66,15 +66,15 @@ def parse_telegram():
                 img_path = os.path.join(IMAGES_DIR, img_filename)
                 
                 try:
-                    # Скачиваем фото в папку
+                    # Скачиваем фото в папку images/
                     img_response = requests.get(temp_url, headers=headers, timeout=10)
                     if img_response.status_code == 200:
                         with open(img_path, 'wb') as f:
                             f.write(img_response.content)
-                        # Сохраняем в базу постоянную ссылку на GitHub
+                        # Создаем вечную ссылку на ваш GitHub
                         final_image_url = GITHUB_RAW_BASE + img_filename
                     else:
-                        final_image_url = temp_url
+                        final_image_url = temp_url # Резервный вариант
                 except Exception:
                     final_image_url = temp_url
                 
@@ -90,12 +90,14 @@ def parse_telegram():
             "postLink": post_link
         })
             
+    # 4. ОБЪЕДИНЯЕМ И СОХРАНЯЕМ
     if new_posts:
+        # Добавляем новые посты наверх, а старые оставляем внизу
         all_posts = new_posts + existing_data
         all_posts.sort(key=lambda x: x.get('postDate', ''), reverse=True)
         with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
             json.dump(all_posts, f, ensure_ascii=False, indent=2)
-        print(f"Добавлено новых постов: {len(new_posts)}. Картинки скачаны.")
+        print(f"Успех! Добавлено новых постов: {len(new_posts)}. Картинки скачаны.")
     else:
         print("Новых постов нет. Старые не трогаем.")
 
