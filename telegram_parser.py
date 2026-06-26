@@ -1,105 +1,108 @@
+import os
+import json
+import re
 import requests
 from bs4 import BeautifulSoup
-import json
-import os
-import re
 
-CHANNEL_URL = "https://t.me/s/sportpittrueform"
-OUTPUT_FILE = "telegram_blog_data.json"
-IMAGES_DIR = "images"
-# Ваша постоянная ссылка на картинки в GitHub (замените если нужно)
-GITHUB_RAW_BASE = "https://raw.githubusercontent.com/nikitakorshikovuz-ui/trueform-blog-api/main/images/"
+# --- Точная конфигурация под твой репозиторий ---
+CHANNEL_URL = 'https://t.me/s/sportpittrueform'
+JSON_FILE = 'telegram_blog_data.json'
+IMAGES_DIR = 'images'
+GITHUB_RAW_BASE = 'https://raw.githubusercontent.com/nikitakorshikovuz-ui/trueform-blog-api/main/images/'
 
-def parse_telegram():
-    existing_data = []
-    # 1. Загружаем старые посты, чтобы не затереть их
-    if os.path.exists(OUTPUT_FILE):
+def main():
+    os.makedirs(IMAGES_DIR, exist_ok=True)
+
+    existing_posts = []
+    existing_ids = set()
+    if os.path.exists(JSON_FILE):
         try:
-            with open(OUTPUT_FILE, 'r', encoding='utf-8') as f:
-                existing_data = json.load(f)
-        except Exception:
-            pass
-            
-    existing_ids = {post.get('id') for post in existing_data if post.get('id')}
-    
-    # 2. Создаем папку для картинок, если её нет
-    if not os.path.exists(IMAGES_DIR):
-        os.makedirs(IMAGES_DIR)
-    
+            with open(JSON_FILE, 'r', encoding='utf-8') as f:
+                existing_posts = json.load(f)
+                existing_ids = {post['id'] for post in existing_posts}
+        except json.JSONDecodeError:
+            print("Создаем новый JSON...")
+
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
     
     try:
-        response = requests.get(CHANNEL_URL, headers=headers, timeout=10)
+        response = requests.get(CHANNEL_URL, headers=headers)
         response.raise_for_status()
-    except Exception as e:
-        print(f"Ошибка загрузки Telegram: {e}")
+    except requests.exceptions.RequestException as e:
+        print(f"Ошибка при загрузке канала: {e}")
         return
-        
-    soup = BeautifulSoup(response.text, "html.parser")
-    messages = soup.find_all("div", class_="tgme_widget_message_wrap")
-    
+
+    soup = BeautifulSoup(response.text, 'html.parser')
+    messages = soup.find_all('div', class_='tgme_widget_message')
+
     new_posts = []
+
     for msg in messages:
-        msg_el = msg.find("div", class_="tgme_widget_message")
-        post_id = msg_el["data-post"] if msg_el and "data-post" in msg_el.attrs else ""
-        if not post_id: continue
-            
-        # ЗАЩИТА: Если пост уже есть в базе — пропускаем его (не трогаем старое!)
+        post_path = msg.get('data-post', '')
+        if not post_path:
+            continue
+        
+        try:
+            post_id = int(post_path.split('/')[-1])
+        except ValueError:
+            continue
+
         if post_id in existing_ids:
             continue
 
-        text_el = msg.find("div", class_="tgme_widget_message_text")
-        if not text_el: continue
-        clean_text = text_el.decode_contents()
-        
-        # 3. НАХОДИМ И СКАЧИВАЕМ КАРТИНКУ
-        img_el = msg.find("a", class_="tgme_widget_message_photo_wrap")
-        final_image_url = ""
-        
-        if img_el and "style" in img_el.attrs:
-            match = re.search(r"url\(['\"]?([^'\"]+)['\"]?\)", img_el["style"])
-            if match: 
-                temp_url = match.group(1)
-                img_filename = f"post_{post_id.replace('/', '_')}.jpg"
-                img_path = os.path.join(IMAGES_DIR, img_filename)
+        text_elem = msg.find('div', class_='tgme_widget_message_text')
+        html_text = ""
+        if text_elem:
+            raw_text = text_elem.get_text(separator='\n', strip=True)
+            paragraphs = raw_text.split('\n')
+            html_text = ''.join(f'<p>{p.strip()}</p>' for p in paragraphs if p.strip())
+
+        if not html_text:
+            continue
+
+        date_elem = msg.find('time', class_='datetime')
+        post_date = date_elem.get('datetime', '') if date_elem else ''
+        post_link = f"https://t.me/{post_path}"
+
+        image_url = ""
+        photo_wrap = msg.find('div', class_='tgme_widget_message_photo_wrap')
+        if photo_wrap and 'style' in photo_wrap.attrs:
+            style = photo_wrap['style']
+            match = re.search(r"background-image:url\('([^']+)'\)", style)
+            if match:
+                tg_img_url = match.group(1)
+                img_filename = f"post_{post_id}.jpg"
+                img_filepath = os.path.join(IMAGES_DIR, img_filename)
                 
                 try:
-                    # Скачиваем фото в папку images/
-                    img_response = requests.get(temp_url, headers=headers, timeout=10)
-                    if img_response.status_code == 200:
-                        with open(img_path, 'wb') as f:
-                            f.write(img_response.content)
-                        # Создаем вечную ссылку на ваш GitHub
-                        final_image_url = GITHUB_RAW_BASE + img_filename
-                    else:
-                        final_image_url = temp_url # Резервный вариант
-                except Exception:
-                    final_image_url = temp_url
-                
-        time_el = msg.find("time", class_="time")
-        post_date = time_el["datetime"] if time_el and "datetime" in time_el.attrs else ""
-        post_link = f"https://t.me/{post_id}"
-            
-        new_posts.append({
-            "id": post_id,
-            "cleanText": clean_text,
-            "imageUrl": final_image_url,
-            "postDate": post_date,
-            "postLink": post_link
-        })
-            
-    # 4. ОБЪЕДИНЯЕМ И СОХРАНЯЕМ
-    if new_posts:
-        # Добавляем новые посты наверх, а старые оставляем внизу
-        all_posts = new_posts + existing_data
-        all_posts.sort(key=lambda x: x.get('postDate', ''), reverse=True)
-        with open(OUTPUT_FILE, 'w', encoding='utf-8') as f:
-            json.dump(all_posts, f, ensure_ascii=False, indent=2)
-        print(f"Успех! Добавлено новых постов: {len(new_posts)}. Картинки скачаны.")
-    else:
-        print("Новых постов нет. Старые не трогаем.")
+                    img_response = requests.get(tg_img_url, headers=headers)
+                    img_response.raise_for_status()
+                    with open(img_filepath, 'wb') as img_file:
+                        img_file.write(img_response.content)
+                    image_url = f"{GITHUB_RAW_BASE}{img_filename}"
+                except requests.exceptions.RequestException:
+                    image_url = ""
 
-if __name__ == "__main__":
-    parse_telegram()
+        post_data = {
+            'id': post_id,
+            'date': post_date,
+            'link': post_link,
+            'text_html': html_text,
+            'image': image_url
+        }
+        new_posts.append(post_data)
+
+    if new_posts:
+        new_posts.reverse()
+        final_posts = new_posts + existing_posts
+        
+        with open(JSON_FILE, 'w', encoding='utf-8') as f:
+            json.dump(final_posts, f, ensure_ascii=False, indent=4)
+        print(f"Добавлено {len(new_posts)} новых постов.")
+    else:
+        print("Новых постов не найдено.")
+
+if __name__ == '__main__':
+    main()
