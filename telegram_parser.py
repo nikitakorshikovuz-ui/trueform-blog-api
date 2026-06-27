@@ -49,6 +49,7 @@ def main():
         except ValueError:
             continue
 
+        # ЗАЩИТА: Если пост уже есть в базе - мы его не трогаем.
         if post_id in existing_ids:
             continue
 
@@ -68,28 +69,38 @@ def main():
         post_link = f"https://t.me/{post_path}"
 
         image_url = ""
+        tg_img_url = ""
         
-        # === ИСПРАВЛЕНИЕ ===
-        # Ищем ЛЮБОЙ тег с классом фото или превью видео (без привязки к a/div)
-        media_wrap = msg.find(class_=re.compile(r'tgme_widget_message_(photo_wrap|video_thumb)'))
+        # === АГРЕССИВНЫЙ ПОИСК КАРТИНОК ===
+        # 1. Ищем любые элементы со стилем background-image
+        elements_with_style = msg.find_all(style=True)
+        for el in elements_with_style:
+            style_attr = el['style']
+            if 'background-image' in style_attr:
+                urls = re.findall(r"url\(['\"]?([^'\")]+)['\"]?\)", style_attr)
+                if urls:
+                    tg_img_url = urls[0]
+                    break # Нашли картинку - выходим из цикла
         
-        if media_wrap and 'style' in media_wrap.attrs:
-            style = media_wrap['style']
-            # Умный поиск URL (вытаскивает ссылку независимо от того, как Telegram её обернул)
-            match = re.search(r"background-image:\s*url\(['\"]?([^'\")]+)['\"]?\)", style)
-            if match:
-                tg_img_url = match.group(1)
-                img_filename = f"post_{post_id}.jpg"
-                img_filepath = os.path.join(IMAGES_DIR, img_filename)
-                
-                try:
-                    img_response = requests.get(tg_img_url, headers=headers)
-                    img_response.raise_for_status()
-                    with open(img_filepath, 'wb') as img_file:
-                        img_file.write(img_response.content)
-                    image_url = f"{GITHUB_RAW_BASE}{img_filename}"
-                except requests.exceptions.RequestException:
-                    pass
+        # 2. Если не нашли в стилях, ищем обычный тег img
+        if not tg_img_url:
+            img_tag = msg.find('img')
+            if img_tag and img_tag.get('src'):
+                tg_img_url = img_tag['src']
+
+        # Если картинка найдена - скачиваем её
+        if tg_img_url:
+            img_filename = f"post_{post_id}.jpg"
+            img_filepath = os.path.join(IMAGES_DIR, img_filename)
+            
+            try:
+                img_response = requests.get(tg_img_url, headers=headers)
+                img_response.raise_for_status()
+                with open(img_filepath, 'wb') as img_file:
+                    img_file.write(img_response.content)
+                image_url = f"{GITHUB_RAW_BASE}{img_filename}" # Ссылка для сайта
+            except Exception:
+                pass
 
         post_data = {
             'id': post_id,
@@ -101,7 +112,7 @@ def main():
         new_posts.append(post_data)
 
     if new_posts:
-        new_posts.reverse()
+        new_posts.reverse() # Свежие сверху
         final_posts = new_posts + existing_posts
         
         with open(JSON_FILE, 'w', encoding='utf-8') as f:
